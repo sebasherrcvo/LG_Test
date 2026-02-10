@@ -3,18 +3,11 @@ import pandas as pd
 import plotly.express as px
 import re
 import io
-import gc  # Used for manual memory release
+import gc 
 from datetime import datetime, time
 
 # --- CONFIG ---
 st.set_page_config(page_title="Cycle Time Analytics", layout="wide")
-
-st.markdown("""
-    <style>
-    .stDeployButton { display: none !important; } 
-    footer { visibility: hidden; }
-    </style>
-    """, unsafe_allow_html=True)
 
 # --- MEMORY-OPTIMIZED HELPER FUNCTIONS ---
 def extract_numeric_suffix(text):
@@ -31,7 +24,13 @@ def load_data(file):
     # Parquet preserves types and uses significantly less RAM than CSV
     df = pd.read_parquet(file)
     
-    # MEMORY OPTIMIZATION: Convert strings to categories to save up to 90% RAM
+    # --- ENFORCE UNIQUE CYCLE IDs ---
+    # We identify a unique cycle by the combination of Program, Station, and Cycle Number.
+    # This removes redundant rows that would inflate your Sample Count.
+    unique_cols = ['mainprogram_name1', 'station_name1', 'cycle_number1']
+    df = df.drop_duplicates(subset=unique_cols, keep='last')
+    
+    # MEMORY OPTIMIZATION: Convert strings to categories
     for col in ['mainprogram_name1', 'stepprogram_name1', 'station_name1']:
         if col in df.columns:
             df[col] = df[col].astype('category')
@@ -58,7 +57,7 @@ def convert_df_to_excel(df_final, summary_df):
 def main():
     st.title("Station Cycle Time Analyzer")
     
-    # Fixing uploader to show .parquet files in explorer
+    # Fixed uploader to show .parquet files
     uploaded_file = st.file_uploader("Upload Data (Parquet Format)", type=["parquet"])
 
     if uploaded_file:
@@ -82,22 +81,17 @@ def main():
         else:
             start_date = end_date = selected_dates
 
-        # Apply primary filters
         mask = (df['mainprogram_name1'] == selected_program) & \
                (df['step_start_utc1'].dt.date >= start_date) & \
                (df['step_start_utc1'].dt.date <= end_date) & \
                (df['step_start_utc1'].dt.time >= hour_range[0]) & \
                (df['step_start_utc1'].dt.time <= hour_range[1])
         
-        # Create filtered copy and clean up RAM immediately
         df_filtered = df[mask].copy()
-        
-        # Filter by cycle time noise
         df_filtered = df_filtered[(df_filtered['total_cycle_time_secs1'] >= time_filter[0]) & 
                                   (df_filtered['total_cycle_time_secs1'] <= time_filter[1])]
 
-        # --- ACCURATE SAMPLE COUNTING ---
-        # Logic to handle station-specific visibility
+        # --- STATION VISIBILITY ---
         if 'ignored_stations' not in st.session_state: 
             st.session_state.ignored_stations = set()
 
@@ -114,11 +108,10 @@ def main():
             st.session_state.ignored_stations = set()
             st.rerun()
 
-        # Final Dataset based strictly on user selections
+        # Final Dataset (Unique cycles only)
         df_final = df_filtered[~df_filtered['station_name1'].isin(st.session_state.ignored_stations)].copy()
 
         if not df_final.empty:
-            # Drop unused categories to free up memory
             df_final['station_name1'] = df_final['station_name1'].cat.remove_unused_categories()
             
             summary = df_final.groupby(['station_name1', 'sv_tag'], observed=True)['total_cycle_time_secs1'].agg(['median', 'count']).reset_index()
@@ -126,13 +119,13 @@ def main():
             summary = summary.sort_values('sort_key')
 
             # Accurate bottleneck and sample metrics
-            total_samples = int(summary['count'].sum()) # Sum of counts after all filters
+            total_samples = int(summary['count'].sum()) 
             raw_bottleneck = summary['median'].max()
             bottleneck_buffered = raw_bottleneck * 1.15
             uph = 3600 / bottleneck_buffered if bottleneck_buffered > 0 else 0
             
             m1, m2, m3 = st.columns(3)
-            m1.metric("Samples (Filter Active)", f"{total_samples:,}")
+            m1.metric("Unique Cycles (Filtered)", f"{total_samples:,}")
             m2.metric("Est. UPH (+15%)", f"{uph:.1f}")
             m3.metric("Bottleneck (+15%)", f"{bottleneck_buffered:.1f}s")
 
@@ -146,10 +139,10 @@ def main():
         else:
             st.warning("No data matches selected filters.")
 
-        # FINAL MEMORY RELEASE
+        # CLEAN UP RAM
         del df_filtered
         del df_final
-        gc.collect() # Manually trigger Python garbage collection
+        gc.collect() 
 
 if __name__ == "__main__":
     main()
