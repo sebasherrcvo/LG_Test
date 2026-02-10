@@ -18,6 +18,7 @@ st.markdown("""
 
 # --- HELPER FUNCTIONS ---
 def extract_numeric_suffix(text):
+    """Extracts station number for logical sorting (e.g., S06 -> 6)."""
     s_match = re.search(r'_S(\d+)', str(text))
     if s_match: return int(s_match.group(1))
     match = re.search(r'(\d+)', str(text))
@@ -28,7 +29,7 @@ def sort_by_station_number(station_list):
 
 @st.cache_data(show_spinner="Unpacking Parquet Data...")
 def load_data(file):
-    # Using read_parquet uses significantly less RAM than CSV
+    # Parquet is significantly faster and smaller in RAM than CSV
     df = pd.read_parquet(file)
     
     if not pd.api.types.is_datetime64_any_dtype(df['step_start_utc1']):
@@ -43,11 +44,21 @@ def load_data(file):
     )
     return df
 
+# --- RE-ADDED EXCEL EXPORT FUNCTION ---
+def convert_df_to_excel(df_final, summary_df):
+    """Generates an Excel download in memory."""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        summary_df.to_excel(writer, index=False, sheet_name='Summary_Stats')
+        # Excel has a ~1 million row limit; we truncate just in case
+        df_final.iloc[:1000000].to_excel(writer, index=False, sheet_name='Cleaned_Raw_Data')
+    return output.getvalue()
+
 def main():
     st.title("Station Cycle Time Analyzer")
     
-    # --- THIS IS THE FIX FOR YOUR IMAGE ---
-    # Changing type to "parquet" allows the browser to see those files
+    # --- FIXED UPLOADER ---
+    # Changing type to "parquet" allows the browser to see those files in explorer
     uploaded_file = st.file_uploader("Upload Data (Parquet Format)", type=["parquet"])
 
     if uploaded_file:
@@ -94,6 +105,10 @@ def main():
             st.session_state.ignored_stations.update(to_hide)
             st.rerun()
 
+        if st.button("Reset Visibility"):
+            st.session_state.ignored_stations = set()
+            st.rerun()
+
         # --- FINAL METRICS & CHART ---
         df_final = df_filtered[~df_filtered['station_name1'].isin(st.session_state.ignored_stations)].copy()
 
@@ -115,6 +130,15 @@ def main():
             fig.add_hline(y=goal_time, line_color="green", annotation_text="Goal")
             fig.add_hline(y=bottleneck_buffered, line_dash="dash", line_color="orange")
             st.plotly_chart(fig, use_container_width=True)
+
+            # --- EXPORT BUTTON ---
+            excel_file = convert_df_to_excel(df_final, summary)
+            st.download_button(
+                label="📥 Download Excel Report", 
+                data=excel_file, 
+                file_name=f"CycleTime_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         else:
             st.warning("No data matches selected filters.")
 
