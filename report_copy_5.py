@@ -21,16 +21,13 @@ def sort_by_station_number(station_list):
 
 @st.cache_data(show_spinner="Unpacking Parquet Data...")
 def load_data(file):
-    # Parquet preserves types and uses significantly less RAM than CSV
     df = pd.read_parquet(file)
     
-    # --- ENFORCE UNIQUE CYCLE IDs ---
-    # We identify a unique cycle by the combination of Program, Station, and Cycle Number.
-    # This removes redundant rows that would inflate your Sample Count.
+    # Enforce Unique Cycle IDs
     unique_cols = ['mainprogram_name1', 'station_name1', 'cycle_number1']
     df = df.drop_duplicates(subset=unique_cols, keep='last')
     
-    # MEMORY OPTIMIZATION: Convert strings to categories
+    # Memory Optimization: Categorical types
     for col in ['mainprogram_name1', 'stepprogram_name1', 'station_name1']:
         if col in df.columns:
             df[col] = df[col].astype('category')
@@ -57,7 +54,6 @@ def convert_df_to_excel(df_final, summary_df):
 def main():
     st.title("Station Cycle Time Analyzer")
     
-    # Fixed uploader to show .parquet files
     uploaded_file = st.file_uploader("Upload Data (Parquet Format)", type=["parquet"])
 
     if uploaded_file:
@@ -65,15 +61,30 @@ def main():
 
         # --- SIDEBAR FILTERS ---
         st.sidebar.header("Global Filters")
+        
+        # 1. Main Program
         progs = sorted(df['mainprogram_name1'].unique())
         selected_program = st.sidebar.selectbox("Main Program", progs)
         
+        # 2. SV Selection
+        all_svs = sorted(df['sv_tag'].unique())
+        selected_svs = st.sidebar.multiselect("Select SVs to Analyze", all_svs, default=all_svs)
+        
+        # 3. Date & Time
         min_date, max_date = df['step_start_utc1'].min().date(), df['step_start_utc1'].max().date()
         selected_dates = st.sidebar.date_input("Date Range", value=(min_date, max_date))
         hour_range = st.sidebar.slider("Hour Range", value=(time(0, 0), time(23, 59)), format="HH:mm")
 
+        # 4. Noise Filter (Slider + Manual Input)
+        st.sidebar.subheader("Noise Filter (Seconds)")
+        col_min, col_max = st.sidebar.columns(2)
+        noise_min_input = col_min.number_input("Min", value=70)
+        noise_max_input = col_max.number_input("Max", value=300)
+        
+        # Syncing numeric inputs with a slider for convenience
+        noise_range = st.sidebar.slider("Fine-tune Range", 0, 1000, (int(noise_min_input), int(noise_max_input)))
+
         goal_time = st.sidebar.number_input("Goal (s)", value=120)
-        time_filter = st.sidebar.slider("Noise Filter (s)", 0, 1000, (70, 300))
 
         # --- DATA FILTERING ---
         if isinstance(selected_dates, (tuple, list)) and len(selected_dates) == 2:
@@ -82,16 +93,19 @@ def main():
             start_date = end_date = selected_dates
 
         mask = (df['mainprogram_name1'] == selected_program) & \
+               (df['sv_tag'].isin(selected_svs)) & \
                (df['step_start_utc1'].dt.date >= start_date) & \
                (df['step_start_utc1'].dt.date <= end_date) & \
                (df['step_start_utc1'].dt.time >= hour_range[0]) & \
                (df['step_start_utc1'].dt.time <= hour_range[1])
         
         df_filtered = df[mask].copy()
-        df_filtered = df_filtered[(df_filtered['total_cycle_time_secs1'] >= time_filter[0]) & 
-                                  (df_filtered['total_cycle_time_secs1'] <= time_filter[1])]
+        
+        # Use the slider values (which are synced to the manual inputs)
+        df_filtered = df_filtered[(df_filtered['total_cycle_time_secs1'] >= noise_range[0]) & 
+                                  (df_filtered['total_cycle_time_secs1'] <= noise_range[1])]
 
-        # --- STATION VISIBILITY ---
+        # --- VISIBILITY MANAGER ---
         if 'ignored_stations' not in st.session_state: 
             st.session_state.ignored_stations = set()
 
@@ -108,17 +122,17 @@ def main():
             st.session_state.ignored_stations = set()
             st.rerun()
 
-        # Final Dataset (Unique cycles only)
+        # Final Dataset
         df_final = df_filtered[~df_filtered['station_name1'].isin(st.session_state.ignored_stations)].copy()
 
         if not df_final.empty:
             df_final['station_name1'] = df_final['station_name1'].cat.remove_unused_categories()
             
+            # Median and Count per station
             summary = df_final.groupby(['station_name1', 'sv_tag'], observed=True)['total_cycle_time_secs1'].agg(['median', 'count']).reset_index()
             summary['sort_key'] = summary['station_name1'].apply(extract_numeric_suffix)
             summary = summary.sort_values('sort_key')
 
-            # Accurate bottleneck and sample metrics
             total_samples = int(summary['count'].sum()) 
             raw_bottleneck = summary['median'].max()
             bottleneck_buffered = raw_bottleneck * 1.15
@@ -129,7 +143,27 @@ def main():
             m2.metric("Est. UPH (+15%)", f"{uph:.1f}")
             m3.metric("Bottleneck (+15%)", f"{bottleneck_buffered:.1f}s")
 
-            fig = px.bar(summary, x='station_name1', y='median', color='sv_tag', text_auto='.1f', template="plotly_dark")
+            # --- PLOTLY WITH HOVER INFO ---
+            fig = px.bar(
+                summary, 
+                x='station_name1', 
+                y='median', 
+                color='sv_tag', 
+                text_auto='.1f', 
+                template="plotly_dark",
+                # Custom data mapping for hover
+                custom_data=['count']
+            )
+
+            # Update hover template to show "Samples Used"
+            fig.update_traces(
+                hovertemplate="<br>".join([
+                    "Station: %{x}",
+                    "Median CT: %{y:.1f}s",
+                    "Samples Used: %{custom_data[0]}"
+                ])
+            )
+
             fig.add_hline(y=goal_time, line_color="green", annotation_text="Goal")
             fig.add_hline(y=bottleneck_buffered, line_dash="dash", line_color="orange")
             st.plotly_chart(fig, use_container_width=True)
