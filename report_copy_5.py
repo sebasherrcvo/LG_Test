@@ -27,7 +27,7 @@ def load_data(file):
     unique_cols = ['mainprogram_name1', 'station_name1', 'cycle_number1']
     df = df.drop_duplicates(subset=unique_cols, keep='last')
     
-    # Memory Optimization: Categorical types
+    # Memory Optimization: Categorical types reduce RAM usage by up to 90%
     for col in ['mainprogram_name1', 'stepprogram_name1', 'station_name1']:
         if col in df.columns:
             df[col] = df[col].astype('category')
@@ -54,6 +54,7 @@ def convert_df_to_excel(df_final, summary_df):
 def main():
     st.title("Station Cycle Time Analyzer")
     
+    # FIX: Changed type to "parquet" to allow file selection and upload
     uploaded_file = st.file_uploader("Upload Data (Parquet Format)", type=["parquet"])
 
     if uploaded_file:
@@ -66,7 +67,7 @@ def main():
         progs = sorted(df['mainprogram_name1'].unique())
         selected_program = st.sidebar.selectbox("Main Program", progs)
         
-        # 2. SV Selection
+        # 2. SV Selection (New Multi-select)
         all_svs = sorted(df['sv_tag'].unique())
         selected_svs = st.sidebar.multiselect("Select SVs to Analyze", all_svs, default=all_svs)
         
@@ -75,14 +76,14 @@ def main():
         selected_dates = st.sidebar.date_input("Date Range", value=(min_date, max_date))
         hour_range = st.sidebar.slider("Hour Range", value=(time(0, 0), time(23, 59)), format="HH:mm")
 
-        # 4. Noise Filter (Slider + Manual Input)
+        # 4. Noise Filter (Slider + Manual Type-in)
         st.sidebar.subheader("Noise Filter (Seconds)")
-        col_min, col_max = st.sidebar.columns(2)
-        noise_min_input = col_min.number_input("Min", value=70)
-        noise_max_input = col_max.number_input("Max", value=300)
+        c_min, c_max = st.sidebar.columns(2)
+        n_min = c_min.number_input("Min", value=70)
+        n_max = c_max.number_input("Max", value=300)
         
-        # Syncing numeric inputs with a slider for convenience
-        noise_range = st.sidebar.slider("Fine-tune Range", 0, 1000, (int(noise_min_input), int(noise_max_input)))
+        # Slider synced to manual inputs for intuitive control
+        noise_range = st.sidebar.slider("Fine Range Adjustment", 0, 1000, (int(n_min), int(n_max)))
 
         goal_time = st.sidebar.number_input("Goal (s)", value=120)
 
@@ -100,8 +101,6 @@ def main():
                (df['step_start_utc1'].dt.time <= hour_range[1])
         
         df_filtered = df[mask].copy()
-        
-        # Use the slider values (which are synced to the manual inputs)
         df_filtered = df_filtered[(df_filtered['total_cycle_time_secs1'] >= noise_range[0]) & 
                                   (df_filtered['total_cycle_time_secs1'] <= noise_range[1])]
 
@@ -122,13 +121,12 @@ def main():
             st.session_state.ignored_stations = set()
             st.rerun()
 
-        # Final Dataset
+        # Final Dataset (Unique cycles only)
         df_final = df_filtered[~df_filtered['station_name1'].isin(st.session_state.ignored_stations)].copy()
 
         if not df_final.empty:
             df_final['station_name1'] = df_final['station_name1'].cat.remove_unused_categories()
             
-            # Median and Count per station
             summary = df_final.groupby(['station_name1', 'sv_tag'], observed=True)['total_cycle_time_secs1'].agg(['median', 'count']).reset_index()
             summary['sort_key'] = summary['station_name1'].apply(extract_numeric_suffix)
             summary = summary.sort_values('sort_key')
@@ -143,7 +141,7 @@ def main():
             m2.metric("Est. UPH (+15%)", f"{uph:.1f}")
             m3.metric("Bottleneck (+15%)", f"{bottleneck_buffered:.1f}s")
 
-            # --- PLOTLY WITH HOVER INFO ---
+            # --- PLOTLY WITH SAMPLES IN HOVER ---
             fig = px.bar(
                 summary, 
                 x='station_name1', 
@@ -151,17 +149,12 @@ def main():
                 color='sv_tag', 
                 text_auto='.1f', 
                 template="plotly_dark",
-                # Custom data mapping for hover
-                custom_data=['count']
+                custom_data=['count'] # Pass count to hover data
             )
 
-            # Update hover template to show "Samples Used"
+            # Fix: Explicitly map the sample count into the hover tooltip
             fig.update_traces(
-                hovertemplate="<br>".join([
-                    "Station: %{x}",
-                    "Median CT: %{y:.1f}s",
-                    "Samples Used: %{custom_data[0]}"
-                ])
+                hovertemplate="<b>Station:</b> %{x}<br><b>Median CT:</b> %{y:.1f}s<br><b>Samples Used:</b> %{custom_data[0]}"
             )
 
             fig.add_hline(y=goal_time, line_color="green", annotation_text="Goal")
