@@ -1,20 +1,11 @@
-import os
-import sys
-import subprocess
-import re
-import io
+import streamlit as st
 import pandas as pd
 import plotly.express as px
+import os
+import sys
+import re
+import io
 from datetime import datetime, time
-
-# --- AUTO-LAUNCHER & INSTALLER ---
-try:
-    import streamlit as st
-    from streamlit.web import cli as stcli
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "streamlit", "pandas", "plotly", "xlsxwriter"])
-    import streamlit as st
-    from streamlit.web import cli as stcli
 
 def is_running_streamlit():
     return "streamlit" in sys.modules and st.runtime.exists()
@@ -202,4 +193,5 @@ if __name__ == "__main__":
         sys.argv = ["streamlit", "run", sys.argv[0], "--server.maxUploadSize", "5000"]
         sys.exit(stcli.main())
     else:
+
         main()
