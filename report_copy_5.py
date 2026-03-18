@@ -131,7 +131,7 @@ def main():
             m2.metric("Est. UPH (+15% Buffer)", f"{uph:.1f}")
             m3.metric("Bottleneck CT (+15%)", f"{bottleneck_buffered:.1f}s")
 
-            # --- VISUALIZATION ---
+            # --- VISUALIZATION: BY LINE ---
             fig_bar = px.bar(
                 summary, 
                 x='station_name1', 
@@ -146,10 +146,9 @@ def main():
             fig_bar.add_hline(y=bottleneck_buffered, line_dash="dash", line_color="orange", annotation_text="Buffered Bottleneck")
             st.plotly_chart(fig_bar, use_container_width=True)
 
-            # --- NEW: CROSS-LINE AGGREGATED TABLE ---
+            # --- CROSS-LINE AGGREGATION ---
             st.markdown("---")
-            st.subheader("📊 Cross-Line Performance (Merged Station IDs)")
-            st.write("This table combines all lines to show how each station number (e.g., S02) performs globally.")
+            st.subheader("Station Cycle Time Across All Lines")
             
             # Grouping by the base station ID (e.g., S01, S02)
             cross_line_summary = df_final.groupby('base_station')['total_cycle_time_secs1'].agg(
@@ -163,20 +162,35 @@ def main():
             cross_line_summary['sort_key'] = cross_line_summary['base_station'].apply(extract_numeric_suffix)
             cross_line_summary = cross_line_summary.sort_values('sort_key').drop(columns=['sort_key'])
 
+            # Visual: Cross-Line Bar Graph
+            fig_cross = px.bar(
+                cross_line_summary,
+                x='base_station',
+                y='Median_CT',
+                text_auto='.1f',
+                title="Aggregated Median Cycle Time per Station ID",
+                template="plotly_dark",
+                labels={'Median_CT': 'Global Median CT (s)', 'base_station': 'Station ID'}
+            )
+            fig_cross.update_traces(marker_color='steelblue')
+            fig_cross.add_hline(y=goal_time, line_color="green", annotation_text="Goal")
+            st.plotly_chart(fig_cross, use_container_width=True)
+
+            # Table: Cross-Line Data
             st.dataframe(
                 cross_line_summary.style.format({
                     'Median_CT': '{:.2f}s',
                     'Average_CT': '{:.2f}s',
                     'Std_Dev': '{:.2f}',
                     'Sample_Size': '{:,}'
-                }).background_gradient(subset=['Median_CT'], cmap='YlOrRd'),
+                }),
                 use_container_width=True
             )
 
             # --- EXCEL EXPORT ---
             excel_file = convert_df_to_excel(df_final, summary, cross_line_summary)
             st.download_button(
-                label="📥 Download Excel Report", 
+                label="Download Excel Report", 
                 data=excel_file, 
                 file_name=f"CT_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
