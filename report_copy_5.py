@@ -76,7 +76,7 @@ def main():
         
         hour_range = st.sidebar.slider("Hour Range", value=(time(0, 0), time(23, 59)), format="HH:mm")
         goal_time = st.sidebar.number_input("Goal (seconds)", value=120)
-        time_filter = st.sidebar.slider("Cycle Time Range Filter (s)", 0, 1000, (70, 300))
+        time_filter = st.sidebar.slider("Cycle Time Range Filter (s)", 0, 1000, (70, 500))
 
         # --- DATA FILTERING LOGIC ---
         if isinstance(selected_dates, (tuple, list)) and len(selected_dates) == 2:
