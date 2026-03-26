@@ -8,17 +8,15 @@ from datetime import datetime, time
 # --- CONFIG ---
 st.set_page_config(page_title="Cycle Time Analytics", layout="wide")
 
-# Hide Streamlit's default UI elements
 st.markdown("""
     <style>
     .stDeployButton { display: none !important; } 
     footer { visibility: hidden; }
     </style>
-    """, unsafe_allow_html=True)
+    """, unsafe_allow_y=True)
 
 # --- HELPER FUNCTIONS ---
 def extract_numeric_suffix(text):
-    """Extracts station number for logical sorting (e.g., S06 -> 6)."""
     s_match = re.search(r'S(\d+)', str(text))
     if s_match: return int(s_match.group(1))
     match = re.search(r'(\d+)', str(text))
@@ -36,12 +34,12 @@ def load_data(file):
     # Timezone adjustment
     df['step_start_utc1'] = df['step_start_utc1'] - pd.Timedelta(hours=7)
     
-    # Extract Unit (e.g., SV5)
+    # Extract Unit/Line (e.g., SV5)
     df['sv_tag'] = df['station_name1'].apply(
         lambda x: re.search(r'SV\d+', str(x)).group(0) if re.search(r'SV\d+', str(x)) else "Other"
     )
     
-    # Extract Base Station (e.g., S02) for cross-line aggregation
+    # Extract Base Station (e.g., S02)
     df['base_station'] = df['station_name1'].apply(
         lambda x: re.search(r'S\d+', str(x)).group(0) if re.search(r'S\d+', str(x)) else "Unknown"
     )
@@ -49,7 +47,6 @@ def load_data(file):
     return df
 
 def convert_df_to_excel(df_final, summary_df, cross_summary):
-    """Generates an Excel download with multiple sheets."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         summary_df.to_excel(writer, index=False, sheet_name='By_Line_Station')
@@ -59,7 +56,6 @@ def convert_df_to_excel(df_final, summary_df, cross_summary):
 
 def main():
     st.title("Station Cycle Time Analyzer")
-    st.info("Upload your compressed .parquet file.")
     
     uploaded_file = st.file_uploader("Upload Parquet File", type=["parquet"])
 
@@ -68,9 +64,16 @@ def main():
 
         # --- SIDEBAR: FILTERS ---
         st.sidebar.header("Global Filters")
+        
+        # Program Filter
         progs = sorted(df['mainprogram_name1'].unique())
         selected_program = st.sidebar.selectbox("Main Program", progs)
         
+        # --- NEW: LINE FILTER ---
+        available_lines = sorted(df['sv_tag'].unique())
+        selected_lines = st.sidebar.multiselect("Select Lines (SV tags)", available_lines, default=available_lines)
+        
+        # Date and Time Filters
         min_date, max_date = df['step_start_utc1'].min().date(), df['step_start_utc1'].max().date()
         selected_dates = st.sidebar.date_input("Date Range", value=(min_date, max_date))
         
@@ -84,7 +87,9 @@ def main():
         else:
             start_date = end_date = selected_dates
 
+        # Apply standard masks + the new Line (sv_tag) mask
         mask = (df['mainprogram_name1'] == selected_program) & \
+               (df['sv_tag'].isin(selected_lines)) & \
                (df['step_start_utc1'].dt.date >= start_date) & \
                (df['step_start_utc1'].dt.date <= end_date) & \
                (df['step_start_utc1'].dt.time >= hour_range[0]) & \
@@ -115,23 +120,21 @@ def main():
         df_final = df_filtered[~df_filtered['station_name1'].isin(st.session_state.ignored_stations)].copy()
 
         if not df_final.empty:
-            # 1. Summary by specific Station Name (e.g., SV1_S02)
+            # Summary by specific Station Name
             summary = df_final.groupby(['station_name1', 'sv_tag'], observed=True)['total_cycle_time_secs1'].agg(['median', 'count']).reset_index()
             summary['sort_key'] = summary['station_name1'].apply(extract_numeric_suffix)
             summary = summary.sort_values('sort_key')
 
-            # --- BOTTLENECK CALCULATIONS ---
+            # --- METRICS & CHARTS ---
             raw_bottleneck = summary['median'].max()
             bottleneck_buffered = raw_bottleneck * 1.15
             uph = 3600 / bottleneck_buffered if bottleneck_buffered > 0 else 0
             
-            # --- DISPLAY METRICS ---
             m1, m2, m3 = st.columns(3)
             m1.metric("Samples Count", f"{len(df_final):,}")
             m2.metric("Est. UPH (+15% Buffer)", f"{uph:.1f}")
             m3.metric("Bottleneck CT (+15%)", f"{bottleneck_buffered:.1f}s")
 
-            # --- VISUALIZATION: BY LINE ---
             fig_bar = px.bar(
                 summary, 
                 x='station_name1', 
@@ -150,7 +153,6 @@ def main():
             st.markdown("---")
             st.subheader("Station Cycle Time Across All Lines")
             
-            # Grouping by the base station ID (e.g., S01, S02)
             cross_line_summary = df_final.groupby('base_station')['total_cycle_time_secs1'].agg(
                 Median_CT='median',
                 Average_CT='mean',
@@ -158,11 +160,9 @@ def main():
                 Sample_Size='count'
             ).reset_index()
 
-            # Sort logically
             cross_line_summary['sort_key'] = cross_line_summary['base_station'].apply(extract_numeric_suffix)
             cross_line_summary = cross_line_summary.sort_values('sort_key').drop(columns=['sort_key'])
 
-            # Visual: Cross-Line Bar Graph
             fig_cross = px.bar(
                 cross_line_summary,
                 x='base_station',
@@ -176,7 +176,6 @@ def main():
             fig_cross.add_hline(y=goal_time, line_color="green", annotation_text="Goal")
             st.plotly_chart(fig_cross, use_container_width=True)
 
-            # Table: Cross-Line Data
             st.dataframe(
                 cross_line_summary.style.format({
                     'Median_CT': '{:.2f}s',
